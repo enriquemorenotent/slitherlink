@@ -384,12 +384,21 @@ const unassignEdge = (grid, state, edgeId, value) => {
   state.edgeStates[edgeId] = -1
 }
 
-export const solveSlitherlink = (grid, clues, maxSolutions = 2) => {
+export const solveSlitherlink = (grid, clues, maxSolutions = 2, options = {}) => {
+  const { maxNodeVisits = 150000 } = options
   const state = prepareSolverStructures(grid, clues)
   const solutions = []
+  let nodesVisited = 0
+  let exhausted = false
 
   const dfs = () => {
-    if (solutions.length >= maxSolutions) return
+    if (exhausted || solutions.length >= maxSolutions) return
+    if (nodesVisited >= maxNodeVisits) {
+      exhausted = true
+      return
+    }
+    nodesVisited += 1
+
     const nextEdge = chooseNextEdge(grid, state)
     if (nextEdge === -1) {
       if (isSingleLoop(grid, state.edgeStates)) {
@@ -406,34 +415,50 @@ export const solveSlitherlink = (grid, clues, maxSolutions = 2) => {
         dfs()
       }
       unassignEdge(grid, state, nextEdge, value)
-      if (solutions.length >= maxSolutions) return
+      if (exhausted || solutions.length >= maxSolutions) return
     }
   }
 
   dfs()
 
+  solutions.exhausted = exhausted
+  solutions.visited = nodesVisited
+
   return solutions
 }
 
 export const generatePuzzle = (height, width, options = {}) => {
-  const { maxRemovalAttempts = height * width, ensureUnique = true } = options
+  const {
+    maxRemovalAttempts = height * width,
+    ensureUnique = true,
+    minClues = Math.ceil(height * width * 0.25),
+    maxSolverSteps = 150000,
+  } = options
   const grid = buildGrid(height, width)
   const loop = generateRandomLoop(grid)
   const clues = computeClues(grid, loop)
   const puzzleClues = [...clues]
+  const clueCountTotal = puzzleClues.reduce((acc, clue) => acc + (clue != null ? 1 : 0), 0)
+  const minClueLimit = Math.max(1, Math.min(grid.cells.length - 1, minClues))
+  let clueCount = clueCountTotal
 
   if (ensureUnique) {
     const cellsOrder = shuffleInPlace(createRange(grid.cells.length))
     let attempts = 0
     for (let i = 0; i < cellsOrder.length; i += 1) {
       if (attempts >= maxRemovalAttempts) break
+      if (clueCount <= minClueLimit) break
       const cellId = cellsOrder[i]
       if (puzzleClues[cellId] == null) continue
       const backup = puzzleClues[cellId]
       puzzleClues[cellId] = null
-      const solutions = solveSlitherlink(grid, puzzleClues, 2)
-      if (solutions.length !== 1) {
+      const solutions = solveSlitherlink(grid, puzzleClues, 2, {
+        maxNodeVisits: maxSolverSteps,
+      })
+      if (solutions.exhausted || solutions.length !== 1) {
         puzzleClues[cellId] = backup
+      } else {
+        clueCount -= 1
       }
       attempts += 1
     }
@@ -453,4 +478,3 @@ export const generatePuzzle = (height, width, options = {}) => {
     fullClues: clues,
   }
 }
-

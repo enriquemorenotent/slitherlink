@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import SlitherlinkBoard from './components/SlitherlinkBoard.jsx'
 import { generatePuzzle } from './logic/slitherlink.js'
 import './App.css'
 
 const difficultyOptions = {
-  easy: { label: 'Easy', removalRatio: 0.4 },
-  medium: { label: 'Medium', removalRatio: 0.65 },
-  hard: { label: 'Hard', removalRatio: 1 },
+  easy: { label: 'Easy', removalRatio: 0.45, minClueRatio: 0.55, solverLimit: 60000 },
+  medium: { label: 'Medium', removalRatio: 0.65, minClueRatio: 0.32, solverLimit: 100000 },
+  hard: { label: 'Hard', removalRatio: 0.85, minClueRatio: 0.22, solverLimit: 160000 },
 }
 
 const clampSize = (value) => {
@@ -26,29 +26,46 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
-  const maxRemovalAttempts = useMemo(() => {
-    const option = difficultyOptions[difficulty]
-    const base = height * width
-    if (!option) return Math.max(1, Math.floor(base * 0.6))
-    return Math.max(1, Math.floor(base * option.removalRatio))
-  }, [difficulty, height, width])
+  const baseCellCount = height * width
 
-  const resetBoardState = (grid) => {
+  const maxRemovalAttempts = useMemo(() => {
+    const ratio = difficultyOptions[difficulty]?.removalRatio ?? 0.6
+    const bounded = Math.min(1, Math.max(0, ratio))
+    return Math.max(1, Math.floor(baseCellCount * bounded))
+  }, [difficulty, baseCellCount])
+
+  const minClues = useMemo(() => {
+    const ratio = difficultyOptions[difficulty]?.minClueRatio ?? 0.3
+    const bounded = Math.min(0.95, Math.max(0.05, ratio))
+    const estimate = Math.ceil(baseCellCount * bounded)
+    return Math.max(1, Math.min(baseCellCount - 1, estimate))
+  }, [difficulty, baseCellCount])
+
+  const solverLimit = useMemo(
+    () => difficultyOptions[difficulty]?.solverLimit ?? 120000,
+    [difficulty],
+  )
+
+  const resetBoardState = useCallback((grid) => {
     if (!grid) {
       setEdgeStates([])
       return
     }
     setEdgeStates(new Array(grid.edges.length).fill(0))
-  }
+  }, [setEdgeStates])
 
-  const generateNewPuzzle = () => {
+  const generateNewPuzzle = useCallback(async () => {
+    if (loading) return
     setLoading(true)
     setFeedback(null)
     setError(null)
     try {
+      await new Promise((resolve) => setTimeout(resolve, 0))
       const nextPuzzle = generatePuzzle(height, width, {
         maxRemovalAttempts,
         ensureUnique: true,
+        minClues,
+        maxSolverSteps: solverLimit,
       })
       setPuzzle(nextPuzzle)
       resetBoardState(nextPuzzle.grid)
@@ -59,7 +76,7 @@ function App() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [height, width, maxRemovalAttempts, minClues, solverLimit, loading, resetBoardState])
 
   useEffect(() => {
     generateNewPuzzle()
@@ -67,6 +84,7 @@ function App() {
   }, [])
 
   const handleCycleEdge = (edgeId) => {
+    if (loading) return
     setEdgeStates((previous) => {
       if (!previous.length || edgeId >= previous.length) return previous
       const next = [...previous]
@@ -82,6 +100,7 @@ function App() {
   }
 
   const handleSetEdgeState = (edgeId, value) => {
+    if (loading) return
     setEdgeStates((previous) => {
       if (!previous.length || edgeId >= previous.length) return previous
       const next = [...previous]
@@ -92,7 +111,7 @@ function App() {
   }
 
   const handleResetBoard = () => {
-    if (!puzzle) return
+    if (!puzzle || loading) return
     resetBoardState(puzzle.grid)
     setFeedback(null)
   }
@@ -177,11 +196,16 @@ function App() {
           </select>
         </div>
         <button type="button" className="primary" onClick={generateNewPuzzle} disabled={loading}>
-          {loading ? 'Generating…' : 'Generate Puzzle'}
+          {loading ? 'Generating...' : 'Generate Puzzle'}
         </button>
       </section>
 
       {error && <div className="status status-error">{error}</div>}
+      {loading && !error && (
+        <div className="status status-info" role="status" aria-live="polite">
+          Building a fresh puzzle. Hang tight!
+        </div>
+      )}
       {feedback?.message && (
         <div
           className={`status ${
@@ -197,19 +221,29 @@ function App() {
       )}
 
       <main>
-        {puzzle ? (
-          <SlitherlinkBoard
-            grid={puzzle.grid}
-            clues={puzzle.clues}
-            edgeStates={edgeStates}
-            feedback={feedback}
-            onCycleEdge={handleCycleEdge}
-            onSetEdgeState={handleSetEdgeState}
-            disabled={loading}
-          />
-        ) : (
-          <div className="placeholder">Generate a puzzle to get started.</div>
-        )}
+        <div className="board-shell">
+          {puzzle ? (
+            <SlitherlinkBoard
+              grid={puzzle.grid}
+              clues={puzzle.clues}
+              edgeStates={edgeStates}
+              feedback={feedback}
+              onCycleEdge={handleCycleEdge}
+              onSetEdgeState={handleSetEdgeState}
+              disabled={loading}
+            />
+          ) : (
+            <div className="placeholder" aria-live="polite">
+              {loading ? 'Generating a puzzle...' : 'Generate a puzzle to get started.'}
+            </div>
+          )}
+          {loading && (
+            <div className="loading-overlay" role="status" aria-live="polite">
+              <div className="spinner" />
+              <span>Generating puzzle...</span>
+            </div>
+          )}
+        </div>
       </main>
 
       <section className="actions">
