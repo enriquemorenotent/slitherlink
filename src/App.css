@@ -305,6 +305,12 @@ main {
   font-size: 0.95rem;
 }
 
+.puzzle-meta-secondary {
+  margin-top: 0.35rem;
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
 @media (max-width: 768px) {
   body {
     padding: 1.5rem 1rem;
