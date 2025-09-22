@@ -433,6 +433,8 @@ export const generatePuzzle = (height, width, options = {}) => {
     ensureUnique = true,
     minClues = Math.ceil(height * width * 0.25),
     maxSolverSteps = 150000,
+    maxTotalSolverSteps = maxSolverSteps * 4,
+    stallThreshold = 6,
   } = options
   const grid = buildGrid(height, width)
   const loop = generateRandomLoop(grid)
@@ -445,20 +447,27 @@ export const generatePuzzle = (height, width, options = {}) => {
   if (ensureUnique) {
     const cellsOrder = shuffleInPlace(createRange(grid.cells.length))
     let attempts = 0
+    let stalls = 0
+    let solverBudget = Math.max(maxSolverSteps, maxTotalSolverSteps)
     for (let i = 0; i < cellsOrder.length; i += 1) {
       if (attempts >= maxRemovalAttempts) break
       if (clueCount <= minClueLimit) break
+      if (solverBudget <= 0) break
+      if (stalls >= stallThreshold) break
       const cellId = cellsOrder[i]
       if (puzzleClues[cellId] == null) continue
       const backup = puzzleClues[cellId]
       puzzleClues[cellId] = null
       const solutions = solveSlitherlink(grid, puzzleClues, 2, {
-        maxNodeVisits: maxSolverSteps,
+        maxNodeVisits: Math.min(maxSolverSteps, solverBudget),
       })
+      solverBudget -= solutions.visited || 0
       if (solutions.exhausted || solutions.length !== 1) {
         puzzleClues[cellId] = backup
+        stalls += 1
       } else {
         clueCount -= 1
+        stalls = 0
       }
       attempts += 1
     }

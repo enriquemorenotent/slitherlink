@@ -4,9 +4,30 @@ import { generatePuzzle } from './logic/slitherlink.js'
 import './App.css'
 
 const difficultyOptions = {
-  easy: { label: 'Easy', removalRatio: 0.45, minClueRatio: 0.55, solverLimit: 60000 },
-  medium: { label: 'Medium', removalRatio: 0.65, minClueRatio: 0.32, solverLimit: 100000 },
-  hard: { label: 'Hard', removalRatio: 0.85, minClueRatio: 0.22, solverLimit: 160000 },
+  easy: {
+    label: 'Easy',
+    removalRatio: 0.45,
+    minClueRatio: 0.55,
+    solverLimit: 45000,
+    totalSolverBudget: 90000,
+    stallThreshold: 3,
+  },
+  medium: {
+    label: 'Medium',
+    removalRatio: 0.63,
+    minClueRatio: 0.34,
+    solverLimit: 75000,
+    totalSolverBudget: 180000,
+    stallThreshold: 4,
+  },
+  hard: {
+    label: 'Hard',
+    removalRatio: 0.8,
+    minClueRatio: 0.25,
+    solverLimit: 110000,
+    totalSolverBudget: 260000,
+    stallThreshold: 5,
+  },
 }
 
 const clampSize = (value) => {
@@ -46,6 +67,16 @@ function App() {
     [difficulty],
   )
 
+  const totalSolverBudget = useMemo(
+    () => difficultyOptions[difficulty]?.totalSolverBudget ?? solverLimit * 3,
+    [difficulty, solverLimit],
+  )
+
+  const stallThreshold = useMemo(
+    () => difficultyOptions[difficulty]?.stallThreshold ?? 4,
+    [difficulty],
+  )
+
   const resetBoardState = useCallback((grid) => {
     if (!grid) {
       setEdgeStates([])
@@ -66,6 +97,8 @@ function App() {
         ensureUnique: true,
         minClues,
         maxSolverSteps: solverLimit,
+        maxTotalSolverSteps: totalSolverBudget,
+        stallThreshold,
       })
       setPuzzle(nextPuzzle)
       resetBoardState(nextPuzzle.grid)
@@ -76,7 +109,7 @@ function App() {
     } finally {
       setLoading(false)
     }
-  }, [height, width, maxRemovalAttempts, minClues, solverLimit, loading, resetBoardState])
+  }, [height, width, maxRemovalAttempts, minClues, solverLimit, totalSolverBudget, stallThreshold, loading, resetBoardState])
 
   useEffect(() => {
     generateNewPuzzle()
