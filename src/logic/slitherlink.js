@@ -447,6 +447,173 @@ export const solveSlitherlink = (
 	return solutions;
 };
 
+const deterministicAssignEdge = (grid, state, edgeId, value) => {
+	if (state.edgeStates[edgeId] !== -1) {
+		return false;
+	}
+	return assignEdge(grid, state, edgeId, value);
+};
+
+const runDeterministicLogic = (grid, clues) => {
+	const state = prepareSolverStructures(grid, clues);
+	let progress = true;
+	let iterations = 0;
+	let assignments = 0;
+
+	const applyCellRules = () => {
+		let changed = false;
+		for (let cellIndex = 0; cellIndex < grid.cells.length; cellIndex += 1) {
+			const cellState = state.cellStates[cellIndex];
+			const clue = cellState.clue;
+			if (clue == null) continue;
+			const edges = grid.cells[cellIndex].edges;
+			const unknownEdges = [];
+			for (let i = 0; i < edges.length; i += 1) {
+				const edgeId = edges[i];
+				if (state.edgeStates[edgeId] === -1) unknownEdges.push(edgeId);
+			}
+			if (unknownEdges.length === 0) continue;
+			if (cellState.onCount === clue) {
+				for (let i = 0; i < unknownEdges.length; i += 1) {
+					if (deterministicAssignEdge(grid, state, unknownEdges[i], 0)) {
+						changed = true;
+						assignments += 1;
+					}
+				}
+				continue;
+			}
+			if (cellState.onCount + unknownEdges.length === clue) {
+				for (let i = 0; i < unknownEdges.length; i += 1) {
+					if (deterministicAssignEdge(grid, state, unknownEdges[i], 1)) {
+						changed = true;
+						assignments += 1;
+					}
+				}
+			}
+		}
+		return changed;
+	};
+
+	const applyVertexRules = () => {
+		let changed = false;
+		for (let vertexIndex = 0; vertexIndex < grid.vertices.length; vertexIndex += 1) {
+			const vertexState = state.vertexStates[vertexIndex];
+			const edges = grid.vertices[vertexIndex].edges;
+			const unknownEdges = [];
+			for (let i = 0; i < edges.length; i += 1) {
+				const edgeId = edges[i];
+				if (state.edgeStates[edgeId] === -1) unknownEdges.push(edgeId);
+			}
+			if (unknownEdges.length === 0) continue;
+			if (vertexState.onCount === 2) {
+				for (let i = 0; i < unknownEdges.length; i += 1) {
+					if (deterministicAssignEdge(grid, state, unknownEdges[i], 0)) {
+						changed = true;
+						assignments += 1;
+					}
+				}
+				continue;
+			}
+			const needed = 2 - vertexState.onCount;
+			if (needed <= 0) {
+				for (let i = 0; i < unknownEdges.length; i += 1) {
+					if (deterministicAssignEdge(grid, state, unknownEdges[i], 0)) {
+						changed = true;
+						assignments += 1;
+					}
+				}
+				continue;
+			}
+			if (needed === unknownEdges.length) {
+				for (let i = 0; i < unknownEdges.length; i += 1) {
+					if (deterministicAssignEdge(grid, state, unknownEdges[i], 1)) {
+						changed = true;
+						assignments += 1;
+					}
+				}
+			}
+		}
+		return changed;
+	};
+
+	while (progress) {
+		progress = false;
+		const cellProgress = applyCellRules();
+		const vertexProgress = applyVertexRules();
+		progress = cellProgress || vertexProgress;
+		if (progress) iterations += 1;
+	}
+
+	const determined = state.edgeStates.reduce(
+		(acc, value) => acc + (value !== -1 ? 1 : 0),
+		0
+	);
+	return {
+		determinedEdges: determined,
+		totalEdges: grid.edges.length,
+		iterations,
+		assignments,
+	};
+};
+
+const computeClueStats = (grid, clues) => {
+	const stats = {
+		total: 0,
+		zero: 0,
+		one: 0,
+		two: 0,
+		three: 0,
+		nonZero: 0,
+		interiorNonZero: 0,
+		borderNonZero: 0,
+		high: 0,
+		interiorHigh: 0,
+		borderZero: 0,
+		interiorZero: 0,
+	};
+
+	for (let cellIndex = 0; cellIndex < grid.cells.length; cellIndex += 1) {
+		const clue = clues[cellIndex];
+		if (clue == null) continue;
+		stats.total += 1;
+		switch (clue) {
+			case 0:
+				stats.zero += 1;
+				break;
+			case 1:
+				stats.one += 1;
+				break;
+			case 2:
+				stats.two += 1;
+				break;
+			case 3:
+				stats.three += 1;
+				break;
+			default:
+				break;
+		}
+		if (clue > 0) stats.nonZero += 1;
+		if (clue >= 2) stats.high += 1;
+		const row = Math.floor(cellIndex / grid.width);
+		const col = cellIndex % grid.width;
+		const isInterior =
+			row > 0 &&
+			row < grid.height - 1 &&
+			col > 0 &&
+			col < grid.width - 1;
+		if (isInterior) {
+			if (clue === 0) stats.interiorZero += 1;
+			if (clue > 0) stats.interiorNonZero += 1;
+			if (clue >= 2) stats.interiorHigh += 1;
+		} else {
+			if (clue === 0) stats.borderZero += 1;
+			if (clue > 0) stats.borderNonZero += 1;
+		}
+	}
+
+	return stats;
+};
+
 const attemptPuzzleGeneration = (height, width, options) => {
 	const {
 		maxRemovalAttempts,
@@ -457,6 +624,7 @@ const attemptPuzzleGeneration = (height, width, options) => {
 		stallThreshold,
 		targetClues,
 		minDifficultyVisits = 0,
+		maxLogicSolvedFraction = null,
 	} = options;
 
 	const grid = buildGrid(height, width);
@@ -502,8 +670,26 @@ const attemptPuzzleGeneration = (height, width, options) => {
 		};
 	};
 
+	const tryRemove = tryRemoveFactory();
+
+	const buildPrioritizedOrder = () => {
+		const groups = [[], [], [], [], []];
+		for (let cellId = 0; cellId < puzzleClues.length; cellId += 1) {
+			const clue = puzzleClues[cellId];
+			if (clue == null) continue;
+			const key = clue >= 0 && clue <= 3 ? clue : 4;
+			groups[key].push(cellId);
+		}
+		const order = [];
+		for (let value = 0; value <= 4; value += 1) {
+			if (groups[value].length === 0) continue;
+			shuffleInPlace(groups[value]);
+			order.push(...groups[value]);
+		}
+		return order;
+	};
+
 	if (ensureUnique) {
-		const tryRemove = tryRemoveFactory();
 
 		const effectiveMaxAttempts = Math.max(
 			maxRemovalAttempts ?? grid.cells.length,
@@ -520,7 +706,7 @@ const attemptPuzzleGeneration = (height, width, options) => {
 			solverBudget > 0 &&
 			stalls < effectiveStallLimit
 		) {
-			const pass = shuffleInPlace(createRange(grid.cells.length));
+			const pass = buildPrioritizedOrder();
 			let removedThisPass = 0;
 			for (let i = 0; i < pass.length; i += 1) {
 				if (
@@ -554,12 +740,11 @@ const attemptPuzzleGeneration = (height, width, options) => {
 		minDifficultyVisits > 0 &&
 		finalDifficultyVisits < minDifficultyVisits
 	) {
-		const tryRemove = tryRemoveFactory();
 		const floor = minClueLimit;
 		const canToughen = () => clueCount > floor;
 
 		const tryOneMorePass = () => {
-			const pass = shuffleInPlace(createRange(grid.cells.length));
+			const pass = buildPrioritizedOrder();
 			let removed = 0;
 			for (let i = 0; i < pass.length; i += 1) {
 				if (!canToughen()) break;
@@ -589,6 +774,52 @@ const attemptPuzzleGeneration = (height, width, options) => {
 		}
 	}
 
+	let logicAnalysisRaw = runDeterministicLogic(grid, puzzleClues);
+	if (
+		ensureUnique &&
+		Number.isFinite(maxLogicSolvedFraction) &&
+		maxLogicSolvedFraction >= 0
+	) {
+		let guard = 0;
+		let logicFraction =
+			logicAnalysisRaw.totalEdges === 0
+				? 0
+				: logicAnalysisRaw.determinedEdges / logicAnalysisRaw.totalEdges;
+		while (
+			logicFraction > maxLogicSolvedFraction &&
+			guard < 6 &&
+			clueCount > minClueLimit &&
+			solverBudget > 0
+		) {
+			const pass = buildPrioritizedOrder();
+			let removed = 0;
+			for (let i = 0; i < pass.length; i += 1) {
+				if (clueCount <= minClueLimit) break;
+				if (solverBudget <= 0) break;
+				if (tryRemove(pass[i])) removed += 1;
+			}
+			if (removed === 0) break;
+			logicAnalysisRaw = runDeterministicLogic(grid, puzzleClues);
+			logicFraction =
+				logicAnalysisRaw.totalEdges === 0
+					? 0
+					: logicAnalysisRaw.determinedEdges / logicAnalysisRaw.totalEdges;
+			guard += 1;
+		}
+	}
+
+	const logicMetrics = {
+		determinedEdges: logicAnalysisRaw.determinedEdges,
+		totalEdges: logicAnalysisRaw.totalEdges,
+		solvedFraction:
+			logicAnalysisRaw.totalEdges === 0
+				? 0
+				: logicAnalysisRaw.determinedEdges / logicAnalysisRaw.totalEdges,
+		iterations: logicAnalysisRaw.iterations,
+		assignments: logicAnalysisRaw.assignments,
+	};
+	const clueStats = computeClueStats(grid, puzzleClues);
+
 	return {
 		grid,
 		clues: puzzleClues,
@@ -608,6 +839,10 @@ const attemptPuzzleGeneration = (height, width, options) => {
 			solverStepsUsed,
 			finalDifficultyVisits,
 		},
+		difficultyMetrics: {
+			logic: logicMetrics,
+			clueStats,
+		},
 	};
 };
 
@@ -622,10 +857,75 @@ export const generatePuzzle = (height, width, options = {}) => {
 		targetClues = minClues,
 		minDifficultyVisits = 0,
 		maxPuzzleRetries = 1,
+		logicSolvedRange = { min: 0, max: 1 },
+		minNonZeroClues = 0,
+		minInteriorNonZeroClues = 0,
+		minHighClues = 0,
+		minInteriorHighClues = 0,
+		maxZeroClues = Infinity,
+		maxBorderZeroClues = Infinity,
 	} = options;
 
-	const attempts = Math.max(1, maxPuzzleRetries);
+	const attempts = Math.max(1, maxPuzzleRetries * 3);
 	let bestPuzzle = null;
+	let bestScore = Infinity;
+
+	const clampRange = (value, range) => {
+		const { min, max } = range;
+		const lo = Number.isFinite(min) ? min : -Infinity;
+		const hi = Number.isFinite(max) ? max : Infinity;
+		if (value < lo) return lo;
+		if (value > hi) return hi;
+		return value;
+	};
+
+	const evaluateScore = (puzzle) => {
+		const logicMetrics = puzzle.difficultyMetrics?.logic;
+		const clueStats = puzzle.difficultyMetrics?.clueStats;
+		const solvedFraction = logicMetrics?.solvedFraction ?? 1;
+		const targetFractionMid =
+			((logicSolvedRange.min ?? 0) + (logicSolvedRange.max ?? 1)) / 2;
+		const clamped = clampRange(solvedFraction, logicSolvedRange);
+		const logicPenalty = Math.abs(solvedFraction - clamped);
+		const logicMidPenalty = Math.abs(solvedFraction - targetFractionMid);
+		const cluePenalty = Math.max(
+			0,
+			(minNonZeroClues ?? 0) - (clueStats?.nonZero ?? 0)
+		);
+		const interiorPenalty = Math.max(
+			0,
+			(minInteriorNonZeroClues ?? 0) - (clueStats?.interiorNonZero ?? 0)
+		);
+		const highPenalty = Math.max(0, (minHighClues ?? 0) - (clueStats?.high ?? 0));
+		const interiorHighPenalty = Math.max(
+			0,
+			(minInteriorHighClues ?? 0) - (clueStats?.interiorHigh ?? 0)
+		);
+		const zeroLimit = Number.isFinite(maxZeroClues) ? maxZeroClues : Infinity;
+		const borderZeroLimit = Number.isFinite(maxBorderZeroClues)
+			? maxBorderZeroClues
+			: Infinity;
+		const zeroPenalty =
+			zeroLimit === Infinity
+				? 0
+				: Math.max(0, (clueStats?.zero ?? 0) - zeroLimit);
+		const borderZeroPenalty =
+			borderZeroLimit === Infinity
+				? 0
+				: Math.max(0, (clueStats?.borderZero ?? 0) - borderZeroLimit);
+		const targetPenalty = Math.max(0, puzzle.remainingClueCount - targetClues);
+		return (
+			logicPenalty * 10 +
+			logicMidPenalty * 5 +
+			cluePenalty * 2 +
+			interiorPenalty * 3 +
+			highPenalty * 2 +
+			interiorHighPenalty * 3 +
+			zeroPenalty * 1.5 +
+			borderZeroPenalty * 2 +
+			targetPenalty
+		);
+	};
 
 	for (let attemptIndex = 0; attemptIndex < attempts; attemptIndex += 1) {
 		const puzzle = attemptPuzzleGeneration(height, width, {
@@ -637,22 +937,39 @@ export const generatePuzzle = (height, width, options = {}) => {
 			stallThreshold,
 			targetClues,
 			minDifficultyVisits,
+			maxLogicSolvedFraction: logicSolvedRange.max,
 		});
 
-		if (
-			!bestPuzzle ||
-			puzzle.remainingClueCount < bestPuzzle.remainingClueCount ||
-			(puzzle.remainingClueCount === bestPuzzle.remainingClueCount &&
-				(puzzle.generatorMeta?.finalDifficultyVisits || 0) >
-					(bestPuzzle.generatorMeta?.finalDifficultyVisits || 0))
-		) {
+		const logicMetrics = puzzle.difficultyMetrics?.logic;
+		const clueStats = puzzle.difficultyMetrics?.clueStats;
+		const solvedFraction = logicMetrics?.solvedFraction ?? 1;
+		const withinLogicRange =
+			solvedFraction >= (logicSolvedRange.min ?? 0) &&
+			solvedFraction <= (logicSolvedRange.max ?? 1);
+		const meetsClueCounts =
+			(clueStats?.nonZero ?? 0) >= (minNonZeroClues ?? 0) &&
+			(clueStats?.interiorNonZero ?? 0) >=
+				(minInteriorNonZeroClues ?? 0) &&
+			(clueStats?.high ?? 0) >= (minHighClues ?? 0) &&
+			(clueStats?.interiorHigh ?? 0) >= (minInteriorHighClues ?? 0);
+		const meetsZeroLimits =
+			(clueStats?.zero ?? 0) <= (maxZeroClues ?? Infinity) &&
+			(clueStats?.borderZero ?? 0) <= (maxBorderZeroClues ?? Infinity);
+
+		const puzzleScore = evaluateScore(puzzle);
+
+		if (!bestPuzzle || puzzleScore < bestScore) {
 			bestPuzzle = puzzle;
+			bestScore = puzzleScore;
 		}
 
 		if (
 			puzzle.remainingClueCount <= targetClues &&
 			(puzzle.generatorMeta?.finalDifficultyVisits || 0) >=
-				minDifficultyVisits
+				minDifficultyVisits &&
+			withinLogicRange &&
+			meetsClueCounts &&
+			meetsZeroLimits
 		) {
 			return puzzle;
 		}
